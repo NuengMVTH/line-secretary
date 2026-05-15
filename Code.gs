@@ -51,19 +51,31 @@ function parseAppointmentWithAI(text) {
 
 // ─────────────────────────────────────────────
 function handleCancel(text, replyToken) {
-  const dm = text.replace(/ยกเลิก|ลบนัด|ลบ/g,'').trim().match(/(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{2,4})/);
-  if (!dm) { reply(replyToken, '❓ ระบุวันที่ด้วยนะ เช่น ยกเลิก 13/5/2025'); return; }
-  const day = parseInt(dm[1]), month = parseInt(dm[2]) - 1;
-  const yr = parseInt(dm[3]);
-  const year = yr > 2400 ? yr - 543 : yr < 100 ? 2000 + yr : yr;
-  const keyword = text.replace(/ยกเลิก|ลบนัด|ลบ/g,'').replace(dm[0],'').trim().toLowerCase();
-  const start = new Date(year, month, day, 0, 0, 0);
-  const end   = new Date(year, month, day, 23, 59, 59);
-  const events = CalendarApp.getCalendarById(CALENDAR_ID).getEvents(start, end);
-  const matched = keyword ? events.filter(e => e.getTitle().toLowerCase().includes(keyword)) : events;
-  if (matched.length === 0) { reply(replyToken, '❌ ไม่พบนัดที่ระบุ'); return; }
-  matched.forEach(e => e.deleteEvent());
-  reply(replyToken, '🗑 ยกเลิกนัดแล้ว!\n' + matched.map(e => '📌 ' + e.getTitle()).join('\n'));
+  const today = new Date();
+  const dateStr = Utilities.formatDate(today, 'Asia/Bangkok', 'yyyy-MM-dd');
+  const days = ['อาทิตย์','จันทร์','อังคาร','พุธ','พฤหัส','ศุกร์','เสาร์'];
+  const prompt = 'วันนี้คือ ' + dateStr + ' วัน' + days[today.getDay()] + '\nข้อความ: "' + text + '"\nวิเคราะห์คำสั่งยกเลิกนัด ตอบ JSON อย่างเดียว:\n{"date":"YYYY-MM-DD","keyword":"ชื่อนัด หรือ empty string ถ้าไม่ระบุ"}\nกฎ: "พรุ่งนี้"=วันถัดไป / "วันเสาร์"=เสาร์ถัดไป / "วันนี้"=วันนี้ / ถ้าไม่บอกวันให้ใช้วันนี้';
+  try {
+    const res = UrlFetchApp.fetch('https://api.openai.com/v1/chat/completions', {
+      method: 'post',
+      headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + OPENAI_KEY },
+      payload: JSON.stringify({ model: 'gpt-4o-mini', messages: [{ role: 'user', content: prompt }], max_tokens: 80, temperature: 0 }),
+      muteHttpExceptions: true
+    });
+    let content = JSON.parse(res.getContentText()).choices[0].message.content.trim();
+    content = content.replace(/```json\n?/g,'').replace(/```\n?/g,'').trim();
+    const parsed = JSON.parse(content);
+    if (!parsed.date) { reply(replyToken, '❓ ระบุวันที่ด้วยนะ เช่น "ยกเลิกนัดพรุ่งนี้"'); return; }
+    const [y, mo, d] = parsed.date.split('-').map(Number);
+    const start = new Date(y, mo - 1, d, 0, 0, 0);
+    const end   = new Date(y, mo - 1, d, 23, 59, 59);
+    const events = CalendarApp.getCalendarById(CALENDAR_ID).getEvents(start, end);
+    const keyword = (parsed.keyword || '').trim().toLowerCase();
+    const matched = keyword ? events.filter(e => e.getTitle().toLowerCase().includes(keyword)) : events;
+    if (matched.length === 0) { reply(replyToken, '❌ ไม่พบนัดในวันที่ระบุ'); return; }
+    matched.forEach(e => e.deleteEvent());
+    reply(replyToken, '🗑 ยกเลิกนัดแล้ว!\n' + matched.map(e => '📌 ' + e.getTitle()).join('\n'));
+  } catch(e) { reply(replyToken, '❌ เกิดข้อผิดพลาด ลองใหม่อีกครั้ง'); }
 }
 
 // ─────────────────────────────────────────────
