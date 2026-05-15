@@ -228,9 +228,11 @@ function callOpenAI(userMessage) {
 
   const now = new Date();
   const dateStr = Utilities.formatDate(now, 'Asia/Bangkok', 'dd/MM/yyyy');
+  const timeStr = Utilities.formatDate(now, 'Asia/Bangkok', 'HH:mm');
   const days = ['อาทิตย์','จันทร์','อังคาร','พุธ','พฤหัส','ศุกร์','เสาร์'];
+  const bangkokDow = parseInt(Utilities.formatDate(now, 'Asia/Bangkok', 'u')) % 7;
 
-  const systemPrompt = 'คุณคือเลขาส่วนตัวชื่อ "' + botName + '" จำสิ่งที่เจ้านายบอก ช่วยตอบคำถามทั่วไป และพูดคุยอย่างเป็นมิตรเหมือนเลขาจริงๆ ตอบเป็นภาษาไทย กระชับไม่เกิน 4 ประโยค ห้ามแกล้งทำเป็นว่าบันทึกนัดหรือยกเลิกนัดแทนระบบ วันนี้คือวัน' + days[now.getDay()] + 'ที่ ' + dateStr + profileNote + '\n\n' + getTodayEvents();
+  const systemPrompt = 'คุณคือเลขาส่วนตัวชื่อ "' + botName + '" จำสิ่งที่เจ้านายบอก ช่วยตอบคำถามทั่วไป และพูดคุยอย่างเป็นมิตรเหมือนเลขาจริงๆ ตอบเป็นภาษาไทย กระชับไม่เกิน 4 ประโยค ห้ามแกล้งทำเป็นว่าบันทึกนัดหรือยกเลิกนัดแทนระบบ ตอนนี้คือวัน' + days[bangkokDow] + 'ที่ ' + dateStr + ' เวลา ' + timeStr + ' น.' + profileNote + '\n\n' + getTodayEvents();
 
   const messages = [{ role: 'system', content: systemPrompt }, ...history, { role: 'user', content: userMessage }];
   const res = UrlFetchApp.fetch('https://api.openai.com/v1/chat/completions', {
