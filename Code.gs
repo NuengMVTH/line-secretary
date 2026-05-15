@@ -11,7 +11,9 @@ function doPost(e) {
     const props = PropertiesService.getScriptProperties();
     if (!props.getProperty('USER_ID')) props.setProperty('USER_ID', evt.source.userId);
     const text = evt.message.text.trim();
-    if (/^(ยกเลิก|ลบนัด|ลบ)\s/.test(text)) { handleCancel(text, evt.replyToken); return ok(); }
+    if (/^(ยกเลิก|ลบนัด|ลบ)/.test(text)) { handleCancel(text, evt.replyToken); return ok(); }
+    if (/^(ดูนัด|เช็คนัด|นัดวัน|มีนัด|ตารางนัด)/.test(text)) { handleViewEvents(text, evt.replyToken); return ok(); }
+    if (/^(แก้นัด|เปลี่ยนนัด|ย้ายนัด|แก้ไขนัด)/.test(text)) { handleEditEvent(text, evt.replyToken); return ok(); }
     const parsed = parseAppointmentWithAI(text);
     if (parsed) {
       CalendarApp.getCalendarById(CALENDAR_ID).createEvent(parsed.title, parsed.start, parsed.end);
@@ -75,6 +77,85 @@ function handleCancel(text, replyToken) {
     if (matched.length === 0) { reply(replyToken, '❌ ไม่พบนัดในวันที่ระบุ'); return; }
     matched.forEach(e => e.deleteEvent());
     reply(replyToken, '🗑 ยกเลิกนัดแล้ว!\n' + matched.map(e => '📌 ' + e.getTitle()).join('\n'));
+  } catch(e) { reply(replyToken, '❌ เกิดข้อผิดพลาด ลองใหม่อีกครั้ง'); }
+}
+
+// ─────────────────────────────────────────────
+function handleViewEvents(text, replyToken) {
+  const today = new Date();
+  const dateStr = Utilities.formatDate(today, 'Asia/Bangkok', 'yyyy-MM-dd');
+  const days = ['อาทิตย์','จันทร์','อังคาร','พุธ','พฤหัส','ศุกร์','เสาร์'];
+  const prompt = 'วันนี้คือ ' + dateStr + ' วัน' + days[today.getDay()] + '\nข้อความ: "' + text + '"\nระบุช่วงวันที่ที่ต้องการดูนัด ตอบ JSON อย่างเดียว:\n{"startDate":"YYYY-MM-DD","endDate":"YYYY-MM-DD"}\nกฎ: "พรุ่งนี้"=วันถัดไป / "สัปดาห์นี้"=จันทร์ถึงอาทิตย์ของสัปดาห์นี้ / "สัปดาห์หน้า"=สัปดาห์ถัดไป / "เดือนนี้"=ต้นเดือนถึงสิ้นเดือน / ถ้าไม่ระบุ=วันนี้';
+  try {
+    const res = UrlFetchApp.fetch('https://api.openai.com/v1/chat/completions', {
+      method: 'post',
+      headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + OPENAI_KEY },
+      payload: JSON.stringify({ model: 'gpt-4o-mini', messages: [{ role: 'user', content: prompt }], max_tokens: 80, temperature: 0 }),
+      muteHttpExceptions: true
+    });
+    let content = JSON.parse(res.getContentText()).choices[0].message.content.trim();
+    content = content.replace(/```json\n?/g,'').replace(/```\n?/g,'').trim();
+    const parsed = JSON.parse(content);
+    const [sy, sm, sd] = parsed.startDate.split('-').map(Number);
+    const [ey, em, ed] = parsed.endDate.split('-').map(Number);
+    const start = new Date(sy, sm - 1, sd, 0, 0, 0);
+    const end   = new Date(ey, em - 1, ed, 23, 59, 59);
+    const events = CalendarApp.getCalendarById(CALENDAR_ID).getEvents(start, end);
+    if (events.length === 0) { reply(replyToken, '📭 ไม่มีนัดในช่วงที่ระบุ'); return; }
+    const label = parsed.startDate === parsed.endDate
+      ? Utilities.formatDate(start, 'Asia/Bangkok', 'dd/MM/yyyy')
+      : Utilities.formatDate(start, 'Asia/Bangkok', 'dd/MM') + ' — ' + Utilities.formatDate(end, 'Asia/Bangkok', 'dd/MM/yyyy');
+    const list = events.map(e =>
+      '📌 ' + Utilities.formatDate(e.getStartTime(), 'Asia/Bangkok', 'dd/MM HH:mm') + ' — ' + e.getTitle()
+    ).join('\n');
+    reply(replyToken, '📅 นัด ' + label + '\n\n' + list);
+  } catch(e) { reply(replyToken, '❌ เกิดข้อผิดพลาด ลองใหม่อีกครั้ง'); }
+}
+
+// ─────────────────────────────────────────────
+function handleEditEvent(text, replyToken) {
+  const today = new Date();
+  const dateStr = Utilities.formatDate(today, 'Asia/Bangkok', 'yyyy-MM-dd');
+  const days = ['อาทิตย์','จันทร์','อังคาร','พุธ','พฤหัส','ศุกร์','เสาร์'];
+  const prompt = 'วันนี้คือ ' + dateStr + ' วัน' + days[today.getDay()] + '\nข้อความ: "' + text + '"\nวิเคราะห์คำสั่งแก้ไขนัด ตอบ JSON อย่างเดียว:\n{"searchDate":"YYYY-MM-DD","keyword":"ชื่อนัดเดิม หรือ empty string","newDate":"YYYY-MM-DD หรือ null","newHour":null,"newMinute":null,"newTitle":null}\nnewHour/newMinute/newTitle ให้เป็น null ถ้าไม่เปลี่ยน';
+  try {
+    const res = UrlFetchApp.fetch('https://api.openai.com/v1/chat/completions', {
+      method: 'post',
+      headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + OPENAI_KEY },
+      payload: JSON.stringify({ model: 'gpt-4o-mini', messages: [{ role: 'user', content: prompt }], max_tokens: 150, temperature: 0 }),
+      muteHttpExceptions: true
+    });
+    let content = JSON.parse(res.getContentText()).choices[0].message.content.trim();
+    content = content.replace(/```json\n?/g,'').replace(/```\n?/g,'').trim();
+    const p = JSON.parse(content);
+    const [sy, sm, sd] = p.searchDate.split('-').map(Number);
+    const searchStart = new Date(sy, sm - 1, sd, 0, 0, 0);
+    const searchEnd   = new Date(sy, sm - 1, sd, 23, 59, 59);
+    const events = CalendarApp.getCalendarById(CALENDAR_ID).getEvents(searchStart, searchEnd);
+    const keyword = (p.keyword || '').trim().toLowerCase();
+    const matched = keyword ? events.filter(e => e.getTitle().toLowerCase().includes(keyword)) : events;
+    if (matched.length === 0) { reply(replyToken, '❌ ไม่พบนัดที่ระบุ'); return; }
+    const evt = matched[0];
+    const oldStart = evt.getStartTime();
+    const newTitle = p.newTitle || evt.getTitle();
+    let newStart, newEnd;
+    if (p.newDate) {
+      const [ny, nm, nd] = p.newDate.split('-').map(Number);
+      const h = p.newHour !== null ? p.newHour : oldStart.getHours();
+      const m = p.newMinute !== null ? p.newMinute : oldStart.getMinutes();
+      newStart = new Date(ny, nm - 1, nd, h, m, 0);
+      newEnd   = new Date(ny, nm - 1, nd, h + 1, m, 0);
+    } else if (p.newHour !== null) {
+      newStart = new Date(oldStart.getFullYear(), oldStart.getMonth(), oldStart.getDate(), p.newHour, p.newMinute || 0, 0);
+      newEnd   = new Date(oldStart.getFullYear(), oldStart.getMonth(), oldStart.getDate(), p.newHour + 1, p.newMinute || 0, 0);
+    } else {
+      newStart = oldStart;
+      newEnd   = evt.getEndTime();
+    }
+    evt.deleteEvent();
+    CalendarApp.getCalendarById(CALENDAR_ID).createEvent(newTitle, newStart, newEnd);
+    const ds = Utilities.formatDate(newStart, 'Asia/Bangkok', 'dd/MM/yyyy HH:mm');
+    reply(replyToken, '✏️ แก้ไขนัดแล้ว!\n📌 ' + newTitle + '\n🗓 ' + ds + ' น.');
   } catch(e) { reply(replyToken, '❌ เกิดข้อผิดพลาด ลองใหม่อีกครั้ง'); }
 }
 
