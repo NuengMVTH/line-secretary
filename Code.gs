@@ -11,8 +11,17 @@ function doPost(e) {
     const props = PropertiesService.getScriptProperties();
     if (!props.getProperty('USER_ID')) props.setProperty('USER_ID', evt.source.userId);
     const text = evt.message.text.trim();
+    if (/^ตั้งชื่อ\s/.test(text)) {
+      const name = text.replace(/^ตั้งชื่อ\s+/, '').trim();
+      const props2 = PropertiesService.getScriptProperties();
+      const profile2 = JSON.parse(props2.getProperty('USER_PROFILE') || '{}');
+      profile2['ชื่อบอท'] = name;
+      props2.setProperty('USER_PROFILE', JSON.stringify(profile2));
+      reply(evt.replyToken, '✅ ตั้งชื่อเป็น "' + name + '" แล้วค่ะ');
+      return ok();
+    }
     if (/^(ยกเลิก|ลบนัด|ลบ)/.test(text)) { handleCancel(text, evt.replyToken); return ok(); }
-    if (/^(ดูนัด|เช็คนัด|นัดวัน|มีนัด|ตารางนัด)/.test(text)) { handleViewEvents(text, evt.replyToken); return ok(); }
+    if (/^(ดูนัด|เช็คนัด|นัดวัน|มีนัด|ตารางนัด|วีคนี้|สัปดาห์นี้|สัปดาห์หน้า|เดือนนี้)|นัด.*(สัปดาห์|วีค|เดือน)|มีนัด/.test(text)) { handleViewEvents(text, evt.replyToken); return ok(); }
     if (/^(แก้นัด|เปลี่ยนนัด|ย้ายนัด|แก้ไขนัด)/.test(text)) { handleEditEvent(text, evt.replyToken); return ok(); }
     const parsed = parseAppointmentWithAI(text);
     if (parsed) {
