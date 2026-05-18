@@ -21,7 +21,7 @@ function doPost(e) {
       return ok();
     }
     if (/^(ยกเลิก|ลบนัด|ลบ)/.test(text)) { handleCancel(text, evt.replyToken); return ok(); }
-    if (/^(ดูนัด|เช็คนัด|นัดวัน|มีนัด|ตารางนัด|วีคนี้|สัปดาห์นี้|สัปดาห์หน้า|เดือนนี้)|นัด.*(สัปดาห์|วีค|เดือน)|มีนัด/.test(text)) { handleViewEvents(text, evt.replyToken); return ok(); }
+    if (/^(ดูนัด|เช็คนัด|นัดวัน|ตารางนัด|วีคนี้|สัปดาห์นี้|สัปดาห์หน้า|เดือนนี้)|นัด.*(สัปดาห์|วีค|เดือน)/.test(text)) { handleViewEvents(text, evt.replyToken); return ok(); }
     if (/^(แก้นัด|เปลี่ยนนัด|ย้ายนัด|แก้ไขนัด)/.test(text)) { handleEditEvent(text, evt.replyToken); return ok(); }
     const parsed = parseAppointmentWithAI(text);
     if (parsed) {
@@ -41,7 +41,7 @@ function parseAppointmentWithAI(text) {
   const today = new Date();
   const dateStr = Utilities.formatDate(today, 'Asia/Bangkok', 'yyyy-MM-dd');
   const days = ['อาทิตย์','จันทร์','อังคาร','พุธ','พฤหัส','ศุกร์','เสาร์'];
-  const prompt = 'วันนี้คือ ' + dateStr + ' วัน' + days[today.getDay()] + ' ผู้ใช้ส่งข้อความ: "' + text + '"\nวิเคราะห์ว่าเป็นการบันทึกนัดหมายมั้ย ตอบ JSON อย่างเดียว:\nถ้าเป็นนัด: {"isAppt":true,"date":"YYYY-MM-DD","hour":13,"minute":30,"title":"ชื่อนัด"}\nถ้าไม่ใช่: {"isAppt":false}\nกฎ: "เสาร์หน้า"=วันเสาร์ถัดไปนับจากวันนี้ / "ครึ่ง"=30นาที / "บ่ายโมงครึ่ง"={"hour":13,"minute":30} / คำนวณวันที่ให้แม่นยำ';
+  const prompt = 'วันนี้คือ ' + dateStr + ' วัน' + days[today.getDay()] + ' ผู้ใช้ส่งข้อความ: "' + text + '"\nวิเคราะห์ว่าเป็นการบันทึกนัดหมายมั้ย ตอบ JSON อย่างเดียว:\nถ้าเป็นนัด: {"isAppt":true,"date":"YYYY-MM-DD","hour":13,"minute":30,"duration":60,"title":"ชื่อนัด"}\nถ้าไม่ใช่: {"isAppt":false}\nกฎ: "เสาร์หน้า"=วันเสาร์ถัดไปนับจากวันนี้ / "ครึ่ง"=30นาที / "บ่ายโมงครึ่ง"={"hour":13,"minute":30} / duration คือนาที เช่น 2 ชั่วโมง=120, 30 นาที=30, ถ้าไม่ระบุ=60 / คำนวณวันที่ให้แม่นยำ';
   const res = UrlFetchApp.fetch('https://api.openai.com/v1/chat/completions', {
     method: 'post',
     headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + OPENAI_KEY },
@@ -55,7 +55,8 @@ function parseAppointmentWithAI(text) {
     if (!parsed.isAppt || !parsed.date || parsed.hour === undefined || !parsed.title) return null;
     const [y, mo, d] = parsed.date.split('-').map(Number);
     const start = new Date(y, mo - 1, d, parsed.hour, parsed.minute || 0, 0);
-    const end   = new Date(y, mo - 1, d, parsed.hour + 1, parsed.minute || 0, 0);
+    const durationMs = (parsed.duration || 60) * 60000;
+    const end = new Date(start.getTime() + durationMs);
     return { title: parsed.title, start, end };
   } catch(e) { return null; }
 }
