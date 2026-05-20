@@ -194,28 +194,28 @@ function checkReminders() {
   const notified = JSON.parse(props.getProperty('NOTIFIED') || '{}');
   const cal = CalendarApp.getCalendarById(CALENDAR_ID);
 
-  cal.getEvents(new Date(now.getTime() + 59 * 60000), new Date(now.getTime() + 61 * 60000)).forEach(e => {
+  cal.getEvents(new Date(now.getTime() + 55 * 60000), new Date(now.getTime() + 65 * 60000)).forEach(e => {
     const key = e.getId() + '_60';
     if (!notified[key]) {
       push('🗓 อีก 1 ชั่วโมง!\n📌 ' + e.getTitle() + '\n🕐 ' + Utilities.formatDate(e.getStartTime(), 'Asia/Bangkok', 'HH:mm') + ' น.');
       notified[key] = now.getTime();
     }
   });
-  cal.getEvents(new Date(now.getTime() + 29 * 60000), new Date(now.getTime() + 31 * 60000)).forEach(e => {
+  cal.getEvents(new Date(now.getTime() + 25 * 60000), new Date(now.getTime() + 35 * 60000)).forEach(e => {
     const key = e.getId() + '_30';
     if (!notified[key]) {
       push('⏳ อีก 30 นาที!\n📌 ' + e.getTitle() + '\n🕐 ' + Utilities.formatDate(e.getStartTime(), 'Asia/Bangkok', 'HH:mm') + ' น.');
       notified[key] = now.getTime();
     }
   });
-  cal.getEvents(new Date(now.getTime() + 4 * 60000), new Date(now.getTime() + 6 * 60000)).forEach(e => {
+  cal.getEvents(new Date(now.getTime() + 2 * 60000), new Date(now.getTime() + 8 * 60000)).forEach(e => {
     const key = e.getId() + '_5';
     if (!notified[key]) {
       push('⏰ อีก 5 นาที!\n📌 ' + e.getTitle() + '\n🕐 ' + Utilities.formatDate(e.getStartTime(), 'Asia/Bangkok', 'HH:mm') + ' น.');
       notified[key] = now.getTime();
     }
   });
-  cal.getEvents(new Date(now.getTime() - 60000), new Date(now.getTime() + 60000)).forEach(e => {
+  cal.getEvents(new Date(now.getTime() - 5 * 60000), new Date(now.getTime() + 5 * 60000)).forEach(e => {
     const key = e.getId() + '_now';
     if (!notified[key]) {
       push('🔔 ถึงเวลาแล้ว!\n📌 ' + e.getTitle() + '\n🕐 ' + Utilities.formatDate(e.getStartTime(), 'Asia/Bangkok', 'HH:mm') + ' น.');
