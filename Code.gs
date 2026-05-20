@@ -23,6 +23,7 @@ function doPost(e) {
     if (/^(ยกเลิก|ลบนัด|ลบ)/.test(text)) { handleCancel(text, evt.replyToken); return ok(); }
     if (/^(ดูนัด|เช็คนัด|นัดวัน|ตารางนัด|วีคนี้|สัปดาห์นี้|สัปดาห์หน้า|เดือนนี้)|นัด.*(สัปดาห์|วีค|เดือน)/.test(text)) { handleViewEvents(text, evt.replyToken); return ok(); }
     if (/^(แก้นัด|เปลี่ยนนัด|ย้ายนัด|แก้ไขนัด)/.test(text)) { handleEditEvent(text, evt.replyToken); return ok(); }
+    if (/วันหยุด/.test(text)) { handleHoliday(text, evt.replyToken); return ok(); }
     const parsed = parseAppointmentWithAI(text);
     if (parsed) {
       CalendarApp.getCalendarById(CALENDAR_ID).createEvent(parsed.title, parsed.start, parsed.end);
@@ -166,6 +167,34 @@ function handleEditEvent(text, replyToken) {
     CalendarApp.getCalendarById(CALENDAR_ID).createEvent(newTitle, newStart, newEnd);
     const ds = Utilities.formatDate(newStart, 'Asia/Bangkok', 'dd/MM/yyyy HH:mm');
     reply(replyToken, '✏️ แก้ไขนัดแล้ว!\n📌 ' + newTitle + '\n🗓 ' + ds + ' น.');
+  } catch(e) { reply(replyToken, '❌ เกิดข้อผิดพลาด ลองใหม่อีกครั้ง'); }
+}
+
+// ─────────────────────────────────────────────
+function handleHoliday(text, replyToken) {
+  const today = new Date();
+  const dateStr = Utilities.formatDate(today, 'Asia/Bangkok', 'yyyy-MM-dd');
+  const days = ['อาทิตย์','จันทร์','อังคาร','พุธ','พฤหัส','ศุกร์','เสาร์'];
+  const prompt = 'วันนี้คือ ' + dateStr + ' วัน' + days[today.getDay()] + '\nข้อความ: "' + text + '"\nวิเคราะห์ว่าเป็นการบันทึกวันหยุดมั้ย ตอบ JSON อย่างเดียว:\nถ้าเป็นวันหยุด: {"isHoliday":true,"date":"YYYY-MM-DD"}\nถ้าไม่ใช่: {"isHoliday":false}\nกฎ: "วันนี้"=วันนี้ / "พรุ่งนี้"=วันถัดไป / "1/06/26" หรือ "01/06/2026"=2026-06-01 / คำนวณวันที่ให้แม่นยำ';
+  try {
+    const res = UrlFetchApp.fetch('https://api.openai.com/v1/chat/completions', {
+      method: 'post',
+      headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + OPENAI_KEY },
+      payload: JSON.stringify({ model: 'gpt-4o-mini', messages: [{ role: 'user', content: prompt }], max_tokens: 60, temperature: 0 }),
+      muteHttpExceptions: true
+    });
+    let content = JSON.parse(res.getContentText()).choices[0].message.content.trim();
+    content = content.replace(/```json\n?/g,'').replace(/```\n?/g,'').trim();
+    const parsed = JSON.parse(content);
+    if (!parsed.isHoliday || !parsed.date) {
+      reply(replyToken, callOpenAI(text));
+      return;
+    }
+    const [y, mo, d] = parsed.date.split('-').map(Number);
+    const date = new Date(y, mo - 1, d);
+    CalendarApp.getCalendarById(CALENDAR_ID).createAllDayEvent('วันหยุด', date);
+    const ds = Utilities.formatDate(date, 'Asia/Bangkok', 'dd/MM/yyyy');
+    reply(replyToken, '✅ บันทึกวันหยุดแล้วค่ะ!\n🎉 ' + ds);
   } catch(e) { reply(replyToken, '❌ เกิดข้อผิดพลาด ลองใหม่อีกครั้ง'); }
 }
 
