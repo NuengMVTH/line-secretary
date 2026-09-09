@@ -230,16 +230,36 @@ function handleHoliday(text, replyToken) {
 }
 
 // ─────────────────────────────────────────────
+// คำนวณวันครบกำหนดจริงของเดือนนั้น ๆ
+// ถ้าเดือนสั้นกว่า dueDay (เช่น ตั้งวันที่ 31 แต่ ก.ย. มี 30 วัน) ให้เลื่อนมาวันสุดท้ายของเดือน
+function creditCardDueDate(dueDay, year, month) {
+  const lastDay = new Date(year, month + 1, 0).getDate();
+  return new Date(year, month, Math.min(dueDay, lastDay));
+}
+
 function checkCreditCardDueToday() {
-  const today = new Date().getDate();
-  const cards = getCreditCards();
-  cards.filter(c => c.dueDay === today).forEach(c => {
-    push('💳 ครบกำหนดชำระบัตร ' + c.name + ' วันนี้ค่ะ!\nอย่าลืมจ่ายนะคะ 😊');
-  });
-  // เตือนล่วงหน้า 3 วัน
-  cards.filter(c => c.dueDay === today + 3).forEach(c => {
-    push('⏰ อีก 3 วันครบชำระบัตร ' + c.name + ' (วันที่ ' + c.dueDay + ')\nเตรียมเงินไว้ด้วยนะคะ!');
-  });
+  try {
+    const cards = getCreditCards();
+    if (cards.length === 0) return;
+
+    const now = new Date();
+    const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    const ahead = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 3); // ข้ามเดือน/ข้ามปีได้เอง
+
+    cards.forEach(c => {
+      const dueThisMonth = creditCardDueDate(c.dueDay, today.getFullYear(), today.getMonth());
+      const dueAtAhead   = creditCardDueDate(c.dueDay, ahead.getFullYear(), ahead.getMonth());
+
+      if (dueThisMonth.getTime() === today.getTime()) {
+        push('💳 ครบกำหนดชำระบัตร ' + c.name + ' วันนี้ค่ะ!\nอย่าลืมจ่ายนะคะ 😊');
+      } else if (dueAtAhead.getTime() === ahead.getTime()) {
+        push('⏰ อีก 3 วันครบชำระบัตร ' + c.name + ' (' +
+             Utilities.formatDate(ahead, 'Asia/Bangkok', 'dd/MM') + ')\nเตรียมเงินไว้ด้วยนะคะ!');
+      }
+    });
+  } catch(err) {
+    Logger.log('❌ checkCreditCardDueToday ล้มเหลว: ' + err.message);
+  }
 }
 
 // ─────────────────────────────────────────────
@@ -278,23 +298,31 @@ function handleSetLocation(message, replyToken) {
 
 // ─────────────────────────────────────────────
 function morningBriefing() {
-  const today = new Date();
-  const start = new Date(today.getFullYear(), today.getMonth(), today.getDate(), 0, 0, 0);
-  const end   = new Date(today.getFullYear(), today.getMonth(), today.getDate(), 23, 59, 59);
-  const events = CalendarApp.getCalendarById(CALENDAR_ID).getEvents(start, end);
-  const days = ['อาทิตย์','จันทร์','อังคาร','พุธ','พฤหัส','ศุกร์','เสาร์'];
-  const ds = Utilities.formatDate(today, 'Asia/Bangkok', 'dd/MM/yyyy');
-  let msg;
-  if (events.length === 0) {
-    msg = '🌅 อรุณสวัสดิ์! วัน' + days[today.getDay()] + 'ที่ ' + ds + '\n\n📭 วันนี้ไม่มีนัดหมาย';
-  } else {
-    const list = events.map(e => '  🕐 ' + Utilities.formatDate(e.getStartTime(), 'Asia/Bangkok', 'HH:mm') + ' — ' + e.getTitle()).join('\n');
-    msg = '🌅 อรุณสวัสดิ์! วัน' + days[today.getDay()] + 'ที่ ' + ds + '\n\n📅 นัดวันนี้ ' + events.length + ' รายการ:\n' + list;
+  try {
+    const today = new Date();
+    const start = new Date(today.getFullYear(), today.getMonth(), today.getDate(), 0, 0, 0);
+    const end   = new Date(today.getFullYear(), today.getMonth(), today.getDate(), 23, 59, 59);
+    const events = CalendarApp.getCalendarById(CALENDAR_ID).getEvents(start, end);
+    const days = ['อาทิตย์','จันทร์','อังคาร','พุธ','พฤหัส','ศุกร์','เสาร์'];
+    const ds = Utilities.formatDate(today, 'Asia/Bangkok', 'dd/MM/yyyy');
+    let msg;
+    if (events.length === 0) {
+      msg = '🌅 อรุณสวัสดิ์! วัน' + days[today.getDay()] + 'ที่ ' + ds + '\n\n📭 วันนี้ไม่มีนัดหมาย';
+    } else {
+      const list = events.map(e => '  🕐 ' + Utilities.formatDate(e.getStartTime(), 'Asia/Bangkok', 'HH:mm') + ' — ' + e.getTitle()).join('\n');
+      msg = '🌅 อรุณสวัสดิ์! วัน' + days[today.getDay()] + 'ที่ ' + ds + '\n\n📅 นัดวันนี้ ' + events.length + ' รายการ:\n' + list;
+    }
+    push(msg);
+  } catch(err) {
+    Logger.log('❌ morningBriefing (ปฏิทิน) ล้มเหลว: ' + err.message);
   }
-  push(msg);
-  const weather = getWeather();
-  if (weather) push(weather);
-  checkCreditCardDueToday();
+  try {
+    const weather = getWeather();
+    if (weather) push(weather);
+  } catch(err) {
+    Logger.log('❌ morningBriefing (อากาศ) ล้มเหลว: ' + err.message);
+  }
+  checkCreditCardDueToday(); // แยกออกมา ไม่ให้ล้มตามปฏิทิน/อากาศ
 }
 
 // ─────────────────────────────────────────────
@@ -728,6 +756,7 @@ function handleAddCard(text, replyToken) {
     content = content.replace(/```json\n?/g,'').replace(/```\n?/g,'').trim();
     const p = JSON.parse(content);
     if (!p.isCard) { reply(replyToken, callOpenAI(text)); return; }
+    if (!(p.dueDay >= 1 && p.dueDay <= 31)) { reply(replyToken, '❌ วันครบกำหนดต้องเป็น 1-31 ค่ะ (อ่านได้ว่า "' + p.dueDay + '")'); return; }
     const cards = getCreditCards();
     const idx = cards.findIndex(c => c.name.toLowerCase() === p.name.toLowerCase());
     if (idx >= 0) {
@@ -748,11 +777,18 @@ function handleListCards(replyToken) {
     reply(replyToken, '📭 ยังไม่มีบัตรที่บันทึกไว้ค่ะ\n\nพิมพ์เช่น:\n"บัตร The1 ครบทุกวันที่ 25"\nแล้วจะแจ้งเตือนให้ทุกเดือนเลยค่ะ');
     return;
   }
-  const today = new Date().getDate();
+  const now = new Date();
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
   let msg = '💳 บัตรที่บันทึกไว้ ' + cards.length + ' ใบ\n────────────────\n';
   cards.forEach(c => {
-    const daysUntil = c.dueDay >= today ? c.dueDay - today : (30 - today + c.dueDay);
-    const status = daysUntil === 0 ? ' ⚠️ วันนี้!' : daysUntil <= 3 ? ' 🔴 อีก ' + daysUntil + ' วัน' : ' (วันที่ ' + c.dueDay + ' ทุกเดือน)';
+    // รอบครบกำหนดถัดไปที่ยังไม่ผ่าน
+    let due = creditCardDueDate(c.dueDay, today.getFullYear(), today.getMonth());
+    if (due.getTime() < today.getTime()) due = creditCardDueDate(c.dueDay, today.getFullYear(), today.getMonth() + 1);
+    const daysUntil = Math.round((due.getTime() - today.getTime()) / 86400000);
+    const ds = Utilities.formatDate(due, 'Asia/Bangkok', 'dd/MM');
+    const status = daysUntil === 0 ? ' ⚠️ วันนี้!'
+                 : daysUntil <= 3  ? ' 🔴 อีก ' + daysUntil + ' วัน (' + ds + ')'
+                 : ' — อีก ' + daysUntil + ' วัน (' + ds + ')';
     msg += '💳 ' + c.name + status + '\n';
   });
   reply(replyToken, msg.trim());
