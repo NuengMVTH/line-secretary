@@ -41,7 +41,7 @@ function doPost(e) {
     }
 
     // Credit card commands
-    if (/^(จ่ายแล้ว|ยังไม่จ่าย)s/.test(text)) { handleCardPaid(text, evt.replyToken); return ok(); }
+    if (/^(จ่ายแล้ว|ยังไม่จ่าย)(\s|$)/.test(text)) { handleCardPaid(text, evt.replyToken); return ok(); }
     if (/^(ดูบัตร|บัตรของฉัน|บัตรทั้งหมด|มีบัตรอะไรบ้าง)$/.test(text)) { handleListCards(evt.replyToken); return ok(); }
     if (/^ลบบัตร\s/.test(text)) { handleDeleteCard(text, evt.replyToken); return ok(); }
     if (/บัตร.*(ครบ|ชำระ|จ่าย|วันที่\s*\d)|เพิ่มบัตร/.test(text)) { handleAddCard(text, evt.replyToken); return ok(); }
