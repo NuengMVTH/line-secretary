@@ -298,6 +298,43 @@ function morningBriefing() {
 }
 
 // ─────────────────────────────────────────────
+function nightBriefing() {
+  try {
+    const now = new Date();
+    const props = PropertiesService.getScriptProperties();
+    const t = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1);
+    const ds = Utilities.formatDate(t, 'Asia/Bangkok', 'dd/MM/yyyy');
+
+    // กัน trigger ยิงซ้ำในวันเดียวกัน
+    if (props.getProperty('NIGHT_BRIEFED') === ds) return;
+
+    const start = new Date(t.getFullYear(), t.getMonth(), t.getDate(), 0, 0, 0);
+    const end   = new Date(t.getFullYear(), t.getMonth(), t.getDate(), 23, 59, 59);
+    const events = CalendarApp.getCalendarById(CALENDAR_ID).getEvents(start, end);
+
+    props.setProperty('NIGHT_BRIEFED', ds);
+    if (events.length === 0) return; // พรุ่งนี้ว่าง — ไม่ต้องกวนตอนกลางคืน
+
+    const days = ['อาทิตย์','จันทร์','อังคาร','พุธ','พฤหัส','ศุกร์','เสาร์'];
+    const list = events.map(e => e.isAllDayEvent()
+      ? '  📌 ทั้งวัน — ' + e.getTitle()
+      : '  🕐 ' + Utilities.formatDate(e.getStartTime(), 'Asia/Bangkok', 'HH:mm') + ' น. — ' + e.getTitle()
+    ).join('\n');
+
+    let msg = '🌙 เตือนล่วงหน้า — พรุ่งนี้วัน' + days[t.getDay()] + 'ที่ ' + ds;
+    msg += '\n\n📅 มีนัด ' + events.length + ' รายการ:\n' + list;
+
+    const first = events.filter(e => !e.isAllDayEvent())[0];
+    if (first) {
+      msg += '\n\n⏰ นัดแรก ' + Utilities.formatDate(first.getStartTime(), 'Asia/Bangkok', 'HH:mm') + ' น. เตรียมตัวไว้นะคะ';
+    }
+    push(msg);
+  } catch(err) {
+    Logger.log('❌ nightBriefing ล้มเหลว: ' + err.message);
+  }
+}
+
+// ─────────────────────────────────────────────
 function checkReminders() {
   const now = new Date();
   const props = PropertiesService.getScriptProperties();
@@ -454,6 +491,7 @@ function setupTriggers() {
   ScriptApp.getProjectTriggers().forEach(t => ScriptApp.deleteTrigger(t));
   ScriptApp.newTrigger('morningBriefing').timeBased().atHour(6).everyDays(1).inTimezone('Asia/Bangkok').create();
   ScriptApp.newTrigger('morningNews').timeBased().atHour(8).everyDays(1).inTimezone('Asia/Bangkok').create();
+  ScriptApp.newTrigger('nightBriefing').timeBased().atHour(20).everyDays(1).inTimezone('Asia/Bangkok').create();
   ScriptApp.newTrigger('checkReminders').timeBased().everyMinutes(5).create();
   ScriptApp.newTrigger('monthEndAlert').timeBased().everyDays(1).atHour(20).inTimezone('Asia/Bangkok').create();
   return '✅ Triggers ready';
@@ -940,4 +978,76 @@ function handleFinanceRecord(text, replyToken) {
     reply(replyToken, msg);
 
   } catch(e) { reply(replyToken, '❌ ' + e.message); }
+}
+
+// ─────────────────────────────────────────────
+// ตัวตรวจสอบ nightBriefing — รันได้ทุกเมื่อ ไม่กระทบรอบจริง 20:00
+// เปิดดูผลที่ Execution log ด้านล่าง
+function checkNightBriefing() {
+  const props = PropertiesService.getScriptProperties();
+  const L = m => Logger.log(m);
+  let pass = 0, fail = 0;
+  const ok  = m => { L('✅ ' + m); pass++; };
+  const bad = m => { L('❌ ' + m); fail++; };
+
+  L('═══ ตรวจสอบ nightBriefing ═══');
+
+  // 1) trigger ติดตั้งหรือยัง
+  const handlers = ScriptApp.getProjectTriggers().map(t => t.getHandlerFunction());
+  L('⏰ trigger ที่มีอยู่: ' + (handlers.join(', ') || '(ไม่มีเลย)'));
+  handlers.indexOf('nightBriefing') >= 0
+    ? ok('trigger nightBriefing ติดตั้งแล้ว')
+    : bad('ไม่พบ trigger nightBriefing — ต้องรัน setupTriggers() ก่อน');
+
+  // 2) มี USER_ID ไหม (push() จะเงียบสนิทถ้าไม่มี)
+  const userId = props.getProperty('USER_ID');
+  userId ? ok('มี USER_ID แล้ว (' + userId.substring(0, 8) + '…)')
+         : bad('ไม่มี USER_ID — ต้องทักบอทใน LINE 1 ครั้งก่อน ไม่งั้นข้อความจะไม่ถูกส่งแบบเงียบ ๆ');
+
+  // 3) ปฏิทินพรุ่งนี้มีอะไรบ้าง
+  const t = new Date();
+  t.setDate(t.getDate() + 1);
+  const start = new Date(t.getFullYear(), t.getMonth(), t.getDate(), 0, 0, 0);
+  const end   = new Date(t.getFullYear(), t.getMonth(), t.getDate(), 23, 59, 59);
+  const ds = Utilities.formatDate(t, 'Asia/Bangkok', 'dd/MM/yyyy');
+  let events = [];
+  try {
+    events = CalendarApp.getCalendarById(CALENDAR_ID).getEvents(start, end);
+    ok('อ่านปฏิทินได้ — พรุ่งนี้ ' + ds + ' มี ' + events.length + ' รายการ');
+    events.forEach(e => L('     • ' + (e.isAllDayEvent() ? 'ทั้งวัน' :
+      Utilities.formatDate(e.getStartTime(), 'Asia/Bangkok', 'HH:mm')) + ' — ' + e.getTitle()));
+  } catch(err) {
+    bad('อ่านปฏิทินไม่ได้: ' + err.message);
+  }
+
+  // 4) ยิงของจริงเข้า LINE + อ่านคำตอบจาก LINE จริง ๆ (push ปกติกลืนคำตอบทิ้ง)
+  if (userId) {
+    const preview = events.length === 0
+      ? '🔎 ทดสอบระบบเตือนล่วงหน้า\n\nพรุ่งนี้ ' + ds + ' ไม่มีนัดในปฏิทิน\nคืนนี้ตอน 20:00 ระบบจะเงียบ (ตั้งใจให้เป็นแบบนี้)\n\nลองสร้างนัดพรุ่งนี้แล้วรันซ้ำได้เลย'
+      : '🔎 ทดสอบระบบเตือนล่วงหน้า — ข้างล่างคือหน้าตาข้อความที่จะมาคืนนี้ 20:00';
+    const res = UrlFetchApp.fetch('https://api.line.me/v2/bot/message/push', {
+      method: 'post',
+      headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + LINE_TOKEN },
+      payload: JSON.stringify({ to: userId, messages: [{ type: 'text', text: preview }] }),
+      muteHttpExceptions: true
+    });
+    const code = res.getResponseCode();
+    code === 200 ? ok('ส่ง LINE สำเร็จ (HTTP 200) — เช็คมือถือได้เลย')
+                 : bad('LINE ตอบกลับ HTTP ' + code + ' → ' + res.getContentText());
+
+    // ถ้ามีนัดจริง ส่งของจริงตามไปให้ดูหน้าตา
+    if (events.length > 0 && code === 200) {
+      props.deleteProperty('NIGHT_BRIEFED');
+      nightBriefing();
+      ok('ส่งข้อความตัวจริงตามไปแล้ว');
+    }
+  }
+
+  // 5) ล้าง flag เสมอ เพื่อไม่ให้การทดสอบไปบล็อกรอบจริงคืนนี้
+  props.deleteProperty('NIGHT_BRIEFED');
+  ok('ล้าง NIGHT_BRIEFED แล้ว — รอบจริง 20:00 คืนนี้ยังทำงานปกติ');
+
+  const summary = '═══ สรุป: ผ่าน ' + pass + ' / ไม่ผ่าน ' + fail + ' ═══';
+  L(summary);
+  return summary;
 }
