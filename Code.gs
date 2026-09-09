@@ -41,6 +41,7 @@ function doPost(e) {
     }
 
     // Credit card commands
+    if (/^(จ่ายแล้ว|ยังไม่จ่าย)s/.test(text)) { handleCardPaid(text, evt.replyToken); return ok(); }
     if (/^(ดูบัตร|บัตรของฉัน|บัตรทั้งหมด|มีบัตรอะไรบ้าง)$/.test(text)) { handleListCards(evt.replyToken); return ok(); }
     if (/^ลบบัตร\s/.test(text)) { handleDeleteCard(text, evt.replyToken); return ok(); }
     if (/บัตร.*(ครบ|ชำระ|จ่าย|วันที่\s*\d)|เพิ่มบัตร/.test(text)) { handleAddCard(text, evt.replyToken); return ok(); }
@@ -232,34 +233,127 @@ function handleHoliday(text, replyToken) {
 // ─────────────────────────────────────────────
 // คำนวณวันครบกำหนดจริงของเดือนนั้น ๆ
 // ถ้าเดือนสั้นกว่า dueDay (เช่น ตั้งวันที่ 31 แต่ ก.ย. มี 30 วัน) ให้เลื่อนมาวันสุดท้ายของเดือน
+// คำนวณวันครบกำหนดจริงของเดือนนั้น ๆ
+// ถ้าเดือนสั้นกว่าวันที่ตั้งไว้ (เช่น ตั้ง 31 แต่ ก.ย. มี 30 วัน) ให้เลื่อนมาวันสุดท้ายของเดือน
 function creditCardDueDate(dueDay, year, month) {
   const lastDay = new Date(year, month + 1, 0).getDate();
   return new Date(year, month, Math.min(dueDay, lastDay));
 }
 
-function checkCreditCardDueToday() {
+// คีย์เดือนปัจจุบัน ใช้รีเซ็ตสถานะ "จ่ายแล้ว" อัตโนมัติทุกเดือน
+function currentMonthKey() {
+  return Utilities.formatDate(new Date(), 'Asia/Bangkok', 'yyyy-MM');
+}
+
+function getPaidMap() {
+  return JSON.parse(PropertiesService.getScriptProperties().getProperty('CARD_PAID') || '{}');
+}
+
+function setPaidMap(map) {
+  PropertiesService.getScriptProperties().setProperty('CARD_PAID', JSON.stringify(map));
+}
+
+// เตือนทุกวันเวลา 10:00 ตลอดช่วงครบกำหนด จนกว่าจะพิมพ์ "จ่ายแล้ว <ชื่อบัตร>"
+// บัตรที่ช่วงชำระตรงกันจะรวมเป็นข้อความเดียว
+function checkCreditCards() {
   try {
     const cards = getCreditCards();
     if (cards.length === 0) return;
 
     const now = new Date();
     const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-    const ahead = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 3); // ข้ามเดือน/ข้ามปีได้เอง
+    const monthKey = currentMonthKey();
+    const paid = getPaidMap();
+    const groups = {};
 
     cards.forEach(c => {
-      const dueThisMonth = creditCardDueDate(c.dueDay, today.getFullYear(), today.getMonth());
-      const dueAtAhead   = creditCardDueDate(c.dueDay, ahead.getFullYear(), ahead.getMonth());
+      const from = creditCardDueDate(c.dueFrom, today.getFullYear(), today.getMonth());
+      const to   = creditCardDueDate(c.dueTo,   today.getFullYear(), today.getMonth());
+      if (today.getTime() < from.getTime() || today.getTime() > to.getTime()) return; // ยังไม่ถึง/เลยช่วงแล้ว
+      if (paid[c.name.toLowerCase()] === monthKey) return;                            // กดว่าจ่ายแล้วเดือนนี้
+      const key = c.dueFrom + '-' + c.dueTo;
+      if (!groups[key]) groups[key] = { to: to, left: Math.round((to.getTime() - today.getTime()) / 86400000), names: [] };
+      groups[key].names.push(c.name);
+    });
 
-      if (dueThisMonth.getTime() === today.getTime()) {
-        push('💳 ครบกำหนดชำระบัตร ' + c.name + ' วันนี้ค่ะ!\nอย่าลืมจ่ายนะคะ 😊');
-      } else if (dueAtAhead.getTime() === ahead.getTime()) {
-        push('⏰ อีก 3 วันครบชำระบัตร ' + c.name + ' (' +
-             Utilities.formatDate(ahead, 'Asia/Bangkok', 'dd/MM') + ')\nเตรียมเงินไว้ด้วยนะคะ!');
-      }
+    Object.keys(groups).forEach(k => {
+      const g = groups[k];
+      const ds = Utilities.formatDate(g.to, 'Asia/Bangkok', 'dd/MM');
+      let msg = g.left === 0 ? '🔴 วันสุดท้ายของรอบชำระแล้วค่ะ!\n' : '💳 อยู่ในช่วงครบกำหนดชำระค่ะ\n';
+      msg += '────────────────\n';
+      g.names.forEach(n => { msg += '• ' + n + '\n'; });
+      msg += g.left === 0
+        ? '\n⚠️ ต้องจ่ายวันนี้ (' + ds + ') นะคะ'
+        : '\n⏳ เหลืออีก ' + g.left + ' วัน (ถึง ' + ds + ')';
+      msg += '\n\nจ่ายแล้วพิมพ์:\n' + g.names.map(n => '  "จ่ายแล้ว ' + n + '"').join('\n');
+      if (g.names.length > 1) msg += '\n(จ่ายครบทุกใบพิมพ์ "จ่ายแล้ว ทั้งหมด")';
+      push(msg);
     });
   } catch(err) {
-    Logger.log('❌ checkCreditCardDueToday ล้มเหลว: ' + err.message);
+    Logger.log('❌ checkCreditCards ล้มเหลว: ' + err.message);
   }
+}
+
+// "จ่ายแล้ว UOB Preferred" → หยุดเตือนถึงสิ้นเดือน (พิมพ์ชื่อบางส่วนก็ได้ เช่น "จ่ายแล้ว uob")
+// "จ่ายแล้ว ทั้งหมด"       → เฉพาะบัตรที่อยู่ในช่วงชำระตอนนี้
+// "ยังไม่จ่าย <ชื่อ>"       → ยกเลิก
+function handleCardPaid(text, replyToken) {
+  const undo = /^ยังไม่จ่าย/.test(text);
+  const cards = getCreditCards();
+  const m = text.match(/^(?:จ่ายแล้ว|ยังไม่จ่าย)\s+(.+)$/);
+  if (!m) {
+    reply(replyToken, '❓ ระบุชื่อบัตรด้วยนะคะ เช่น\n' + cards.map(c => '  "จ่ายแล้ว ' + c.name + '"').join('\n'));
+    return;
+  }
+  const q = m[1].trim().toLowerCase();
+  const paid = getPaidMap();
+  const monthKey = currentMonthKey();
+
+  if (['ทั้งหมด','หมด','ครบ','all'].indexOf(q) >= 0) {
+    const now = new Date();
+    const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    const inWindow = cards.filter(c => {
+      const from = creditCardDueDate(c.dueFrom, today.getFullYear(), today.getMonth());
+      const to   = creditCardDueDate(c.dueTo,   today.getFullYear(), today.getMonth());
+      return today.getTime() >= from.getTime() && today.getTime() <= to.getTime();
+    });
+    if (inWindow.length === 0) { reply(replyToken, '📭 ตอนนี้ไม่มีบัตรใบไหนอยู่ในช่วงชำระค่ะ'); return; }
+    inWindow.forEach(c => { if (undo) { delete paid[c.name.toLowerCase()]; } else { paid[c.name.toLowerCase()] = monthKey; } });
+    setPaidMap(paid);
+    reply(replyToken, (undo ? '↩️ ยกเลิกแล้วค่ะ — กลับมาเตือน:\n' : '✅ รับทราบค่ะ! จ่ายครบแล้วเดือนนี้:\n')
+      + inWindow.map(c => '• ' + c.name).join('\n'));
+    return;
+  }
+
+  const card = cards.filter(c => c.name.toLowerCase() === q)[0] ||
+               cards.filter(c => c.name.toLowerCase().indexOf(q) >= 0)[0];
+  if (!card) {
+    reply(replyToken, '❌ ไม่พบบัตร "' + m[1].trim() + '" ค่ะ\nบัตรที่มีอยู่:\n' + cards.map(c => '• ' + c.name).join('\n'));
+    return;
+  }
+  if (undo) {
+    delete paid[card.name.toLowerCase()];
+    setPaidMap(paid);
+    reply(replyToken, '↩️ ยกเลิกแล้วค่ะ — ' + card.name + ' กลับมาเตือนตามปกติ');
+  } else {
+    paid[card.name.toLowerCase()] = monthKey;
+    setPaidMap(paid);
+    reply(replyToken, '✅ รับทราบค่ะ! ' + card.name + ' จ่ายแล้วเดือนนี้\n🔕 หยุดเตือนจนถึงสิ้นเดือน แล้วกลับมาเตือนใหม่รอบหน้าอัตโนมัติ\n\n(กดผิดพิมพ์ "ยังไม่จ่าย ' + card.name + '" ได้ค่ะ)');
+  }
+}
+
+// รันครั้งเดียวใน GAS เพื่อบันทึกบัตรทั้ง 5 ใบของนาย
+function seedMyCards() {
+  const cards = [
+    { name: 'The1',          dueFrom: 25, dueTo: 30 },
+    { name: 'First Choice',  dueFrom: 25, dueTo: 30 },
+    { name: 'Line',          dueFrom: 5,  dueTo: 10 },
+    { name: 'Shopee',        dueFrom: 5,  dueTo: 10 },
+    { name: 'UOB Preferred', dueFrom: 20, dueTo: 25 }
+  ];
+  saveCreditCards(cards);
+  cards.forEach(c => Logger.log('💳 ' + c.name + ' — วันที่ ' + c.dueFrom + '-' + c.dueTo));
+  return '✅ บันทึกบัตร ' + cards.length + ' ใบแล้ว';
 }
 
 // ─────────────────────────────────────────────
@@ -322,7 +416,7 @@ function morningBriefing() {
   } catch(err) {
     Logger.log('❌ morningBriefing (อากาศ) ล้มเหลว: ' + err.message);
   }
-  checkCreditCardDueToday(); // แยกออกมา ไม่ให้ล้มตามปฏิทิน/อากาศ
+  // เตือนบัตรเครดิตย้ายไป checkCreditCards() trigger 10:00 แล้ว
 }
 
 // ─────────────────────────────────────────────
@@ -519,10 +613,11 @@ function setupTriggers() {
   ScriptApp.getProjectTriggers().forEach(t => ScriptApp.deleteTrigger(t));
   ScriptApp.newTrigger('morningBriefing').timeBased().atHour(6).everyDays(1).inTimezone('Asia/Bangkok').create();
   ScriptApp.newTrigger('morningNews').timeBased().atHour(8).everyDays(1).inTimezone('Asia/Bangkok').create();
+  ScriptApp.newTrigger('checkCreditCards').timeBased().atHour(10).everyDays(1).inTimezone('Asia/Bangkok').create();
   ScriptApp.newTrigger('nightBriefing').timeBased().atHour(20).everyDays(1).inTimezone('Asia/Bangkok').create();
   ScriptApp.newTrigger('checkReminders').timeBased().everyMinutes(5).create();
   ScriptApp.newTrigger('monthEndAlert').timeBased().everyDays(1).atHour(20).inTimezone('Asia/Bangkok').create();
-  return '✅ Triggers ready';
+  return '✅ Triggers ready (6 ตัว)';
 }
 
 // ─────────────────────────────────────────────
@@ -736,7 +831,13 @@ function setupRichMenu() {
 // ─────────────────────────────────────────────
 
 function getCreditCards() {
-  return JSON.parse(PropertiesService.getScriptProperties().getProperty('CREDIT_CARDS') || '[]');
+  const raw = JSON.parse(PropertiesService.getScriptProperties().getProperty('CREDIT_CARDS') || '[]');
+  // รองรับข้อมูลเก่าที่เก็บเป็น dueDay วันเดียว → แปลงเป็นช่วงที่มีวันเดียว
+  return raw.map(c => ({
+    name: c.name,
+    dueFrom: c.dueFrom || c.dueDay,
+    dueTo: c.dueTo || c.dueDay || c.dueFrom
+  }));
 }
 
 function saveCreditCards(cards) {
@@ -744,7 +845,7 @@ function saveCreditCards(cards) {
 }
 
 function handleAddCard(text, replyToken) {
-  const prompt = 'ข้อความ: "' + text + '"\nวิเคราะห์ว่าเป็นการเพิ่มบัตรเครดิตหรือตั้งแจ้งเตือนชำระ ตอบ JSON อย่างเดียว:\nถ้าใช่: {"isCard":true,"name":"ชื่อบัตร","dueDay":25}\nถ้าไม่ใช่: {"isCard":false}\n\nตัวอย่าง:\n"บัตร The1 ครบทุกวันที่ 25" → {"isCard":true,"name":"The1","dueDay":25}\n"KTC ชำระทุกวัน 15" → {"isCard":true,"name":"KTC","dueDay":15}\n"เพิ่มบัตร SCB ครบวันที่ 5" → {"isCard":true,"name":"SCB","dueDay":5}';
+  const prompt = 'ข้อความ: "' + text + '"\nวิเคราะห์ว่าเป็นการเพิ่มบัตรเครดิตหรือตั้งแจ้งเตือนชำระ ตอบ JSON อย่างเดียว:\nถ้าใช่: {"isCard":true,"name":"ชื่อบัตร","dueFrom":25,"dueTo":30}\nถ้าไม่ใช่: {"isCard":false}\n\nกฎ: ถ้าระบุวันเดียวให้ dueFrom = dueTo\n\nตัวอย่าง:\n"บัตร The1 ครบวันที่ 25-30" → {"isCard":true,"name":"The1","dueFrom":25,"dueTo":30}\n"บัตร KTC ครบทุกวันที่ 15" → {"isCard":true,"name":"KTC","dueFrom":15,"dueTo":15}\n"เพิ่มบัตร UOB Preferred ชำระ 20 ถึง 25" → {"isCard":true,"name":"UOB Preferred","dueFrom":20,"dueTo":25}';
   try {
     const res = UrlFetchApp.fetch('https://api.openai.com/v1/chat/completions', {
       method: 'post',
@@ -756,17 +857,26 @@ function handleAddCard(text, replyToken) {
     content = content.replace(/```json\n?/g,'').replace(/```\n?/g,'').trim();
     const p = JSON.parse(content);
     if (!p.isCard) { reply(replyToken, callOpenAI(text)); return; }
-    if (!(p.dueDay >= 1 && p.dueDay <= 31)) { reply(replyToken, '❌ วันครบกำหนดต้องเป็น 1-31 ค่ะ (อ่านได้ว่า "' + p.dueDay + '")'); return; }
+
+    const from = p.dueFrom, to = p.dueTo || p.dueFrom;
+    const valid = v => v >= 1 && v <= 31;
+    if (!valid(from) || !valid(to) || to < from) {
+      reply(replyToken, '❌ วันครบกำหนดต้องเป็น 1-31 และวันเริ่มต้องไม่เกินวันสุดท้ายค่ะ (อ่านได้ว่า ' + from + '-' + to + ')');
+      return;
+    }
+    const range = from === to ? 'ทุกวันที่ ' + from : 'วันที่ ' + from + '-' + to;
+
     const cards = getCreditCards();
-    const idx = cards.findIndex(c => c.name.toLowerCase() === p.name.toLowerCase());
+    const idx = cards.map(c => c.name.toLowerCase()).indexOf(String(p.name).toLowerCase());
     if (idx >= 0) {
-      cards[idx].dueDay = p.dueDay;
+      cards[idx].dueFrom = from;
+      cards[idx].dueTo = to;
       saveCreditCards(cards);
-      reply(replyToken, '✏️ อัปเดตแล้วค่ะ!\n💳 ' + p.name + '\n📅 ครบชำระทุกวันที่ ' + p.dueDay + ' ของทุกเดือน');
+      reply(replyToken, '✏️ อัปเดตแล้วค่ะ!\n💳 ' + p.name + '\n📅 ครบชำระ ' + range + ' ของทุกเดือน');
     } else {
-      cards.push({ name: p.name, dueDay: p.dueDay });
+      cards.push({ name: p.name, dueFrom: from, dueTo: to });
       saveCreditCards(cards);
-      reply(replyToken, '✅ บันทึกบัตรแล้วค่ะ!\n💳 ' + p.name + '\n📅 ครบชำระทุกวันที่ ' + p.dueDay + ' ของทุกเดือน\n\nจะแจ้งเตือนให้ทุกเดือนนะคะ 😊');
+      reply(replyToken, '✅ บันทึกบัตรแล้วค่ะ!\n💳 ' + p.name + '\n📅 ครบชำระ ' + range + ' ของทุกเดือน\n\nจะเตือนทุกวัน 10:00 ตลอดช่วงนะคะ 😊');
     }
   } catch(e) { reply(replyToken, '❌ ' + e.message); }
 }
@@ -774,23 +884,35 @@ function handleAddCard(text, replyToken) {
 function handleListCards(replyToken) {
   const cards = getCreditCards();
   if (cards.length === 0) {
-    reply(replyToken, '📭 ยังไม่มีบัตรที่บันทึกไว้ค่ะ\n\nพิมพ์เช่น:\n"บัตร The1 ครบทุกวันที่ 25"\nแล้วจะแจ้งเตือนให้ทุกเดือนเลยค่ะ');
+    reply(replyToken, '📭 ยังไม่มีบัตรที่บันทึกไว้ค่ะ\n\nพิมพ์เช่น:\n"บัตร The1 ครบวันที่ 25-30"\nแล้วจะแจ้งเตือนให้ทุกเดือนเลยค่ะ');
     return;
   }
   const now = new Date();
   const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const monthKey = currentMonthKey();
+  const paid = getPaidMap();
+
   let msg = '💳 บัตรที่บันทึกไว้ ' + cards.length + ' ใบ\n────────────────\n';
   cards.forEach(c => {
-    // รอบครบกำหนดถัดไปที่ยังไม่ผ่าน
-    let due = creditCardDueDate(c.dueDay, today.getFullYear(), today.getMonth());
-    if (due.getTime() < today.getTime()) due = creditCardDueDate(c.dueDay, today.getFullYear(), today.getMonth() + 1);
-    const daysUntil = Math.round((due.getTime() - today.getTime()) / 86400000);
-    const ds = Utilities.formatDate(due, 'Asia/Bangkok', 'dd/MM');
-    const status = daysUntil === 0 ? ' ⚠️ วันนี้!'
-                 : daysUntil <= 3  ? ' 🔴 อีก ' + daysUntil + ' วัน (' + ds + ')'
-                 : ' — อีก ' + daysUntil + ' วัน (' + ds + ')';
-    msg += '💳 ' + c.name + status + '\n';
+    const range = c.dueFrom === c.dueTo ? 'วันที่ ' + c.dueFrom : 'วันที่ ' + c.dueFrom + '-' + c.dueTo;
+    let from = creditCardDueDate(c.dueFrom, today.getFullYear(), today.getMonth());
+    let to   = creditCardDueDate(c.dueTo,   today.getFullYear(), today.getMonth());
+    if (today.getTime() > to.getTime()) { // เลยรอบเดือนนี้แล้ว ดูรอบหน้า
+      from = creditCardDueDate(c.dueFrom, today.getFullYear(), today.getMonth() + 1);
+      to   = creditCardDueDate(c.dueTo,   today.getFullYear(), today.getMonth() + 1);
+    }
+    let status;
+    if (paid[c.name.toLowerCase()] === monthKey) {
+      status = '✅ จ่ายแล้วเดือนนี้';
+    } else if (today.getTime() >= from.getTime() && today.getTime() <= to.getTime()) {
+      const left = Math.round((to.getTime() - today.getTime()) / 86400000);
+      status = left === 0 ? '🔴 วันสุดท้ายวันนี้!' : '🟡 อยู่ในช่วงชำระ เหลือ ' + left + ' วัน';
+    } else {
+      status = '⏳ อีก ' + Math.round((from.getTime() - today.getTime()) / 86400000) + ' วันเริ่มรอบ';
+    }
+    msg += '💳 ' + c.name + ' (' + range + ')\n   ' + status + '\n';
   });
+  msg += '────────────────\nจ่ายแล้วพิมพ์ "จ่ายแล้ว <ชื่อบัตร>"';
   reply(replyToken, msg.trim());
 }
 
